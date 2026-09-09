@@ -174,88 +174,76 @@ def get_weather():
     
     return current_weather
 
-# ========== 2. 获取新闻热搜 ==========
+# ========== 2. 获取新闻热搜（使用 NewsNow API，分开推送） ==========
 def get_hot_news():
-    """获取多个平台的热搜榜"""
+    """获取多个平台的热搜榜，使用 NewsNow API，支持可点击链接"""
     print("📰 正在获取新闻热搜...")
     
     all_news = {}
     
-    # API列表（按优先级排序）
+    # NewsNow API 配置（按平台分开）
     api_list = [
         {
             'name': '微博',
             'key': 'weibo',
-            'urls': [
-                'https://api.oioweb.cn/api/common/HotList',
-                'https://api.vvhan.com/api/hotlist/wbHot',
-            ]
+            'url': 'https://newsnow.busiyi.world/api/s?id=weibo&latest=true',
+            'icon': '🔥'
         },
         {
             'name': '知乎',
             'key': 'zhihu',
-            'urls': [
-                'https://api.oioweb.cn/api/common/HotList',
-                'https://api.vvhan.com/api/hotlist/zhihuHot',
-            ]
+            'url': 'https://newsnow.busiyi.world/api/s?id=zhihu&latest=true',
+            'icon': '💡'
         },
         {
             'name': '百度',
             'key': 'baidu',
-            'urls': [
-                'https://api.oioweb.cn/api/common/HotList',
-                'https://api.vvhan.com/api/hotlist/baiduRD',
-            ]
+            'url': 'https://newsnow.busiyi.world/api/s?id=baidu&latest=true',
+            'icon': '🔍'
         },
     ]
     
     for api_info in api_list:
         name = api_info['name']
         key = api_info['key']
-        print(f"  🔍 获取{name}热搜...")
+        url = api_info['url']
+        icon = api_info['icon']
+        print(f"  {icon} 获取{name}热搜...")
         
-        for url in api_info['urls']:
-            try:
-                # 对于 oioweb API，需要指定 type 参数，并禁用 SSL 验证（自签名证书）
-                if 'oioweb' in url:
-                    type_map = {'weibo': 'weibo', 'zhihu': 'zhihu', 'baidu': 'baidu'}
-                    data = safe_get(url, params={'type': type_map.get(key, key)}, verify=False)
-                else:
-                    data = safe_get(url)
-                
-                if not data:
-                    continue
-                
-                # 解析不同格式的返回
-                items = []
-                
-                # 格式1: oioweb API
-                if 'data' in data and isinstance(data['data'], list):
-                    for item in data['data'][:NEWS_COUNT]:
-                        title = item.get('title', '') or item.get('word', '') or item.get('name', '')
-                        hot = item.get('hot', '') or item.get('hot_value', '') or item.get('score', '')
-                        if title:
-                            items.append({'title': title, 'hot': str(hot) if hot else ''})
-                
-                # 格式2: vvhan API
-                elif data.get('success') and 'data' in data:
-                    for item in data['data'][:NEWS_COUNT]:
-                        title = item.get('title', '')
-                        hot = item.get('hot', '')
-                        if title:
-                            items.append({'title': title, 'hot': str(hot) if hot else ''})
-                
-                if items:
-                    all_news[key] = items
-                    print(f"    ✅ {name}热搜获取成功: {len(items)}条")
-                    break
-                    
-            except Exception as e:
-                print(f"    ⚠️ {name}热搜获取失败: {e}")
+        try:
+            data = safe_get(url, timeout=15)
+            
+            if not data:
+                print(f"    ⚠️ {name}热搜获取失败（无数据）")
                 continue
-        
-        if key not in all_news:
-            print(f"    ⚠️ {name}热搜获取失败")
+            
+            # 解析 NewsNow API 返回格式
+            items = []
+            if data.get('status') in ['success', 'cache'] and 'items' in data:
+                for item in data['items'][:NEWS_COUNT]:
+                    title = item.get('title', '') or item.get('word', '') or item.get('name', '')
+                    link = item.get('url', '') or item.get('link', '')
+                    hot = item.get('hot', '') or item.get('hot_value', '') or item.get('score', '')
+                    if title:
+                        items.append({
+                            'title': title,
+                            'url': link,
+                            'hot': str(hot) if hot else ''
+                        })
+            
+            if items:
+                all_news[key] = {
+                    'name': name,
+                    'icon': icon,
+                    'items': items
+                }
+                print(f"    ✅ {name}热搜获取成功: {len(items)}条")
+            else:
+                print(f"    ⚠️ {name}热搜获取失败（解析为空）")
+                
+        except Exception as e:
+            print(f"    ⚠️ {name}热搜获取失败: {e}")
+            continue
     
     return all_news
 
@@ -319,26 +307,36 @@ def generate_message(weather, news, quote):
     if news:
         msg += "#### 📰 今日热搜\n\n"
         
-        if news.get('weibo'):
-            msg += "**🔥 微博热搜**\n"
-            for i, item in enumerate(news['weibo'][:NEWS_COUNT], 1):
-                hot_str = f" ({item['hot']})" if item['hot'] else ""
-                msg += f"{i}. {item['title']}{hot_str}\n"
-            msg += "\n"
-        
-        if news.get('zhihu'):
-            msg += "**💡 知乎热榜**\n"
-            for i, item in enumerate(news['zhihu'][:NEWS_COUNT], 1):
-                hot_str = f" ({item['hot']})" if item['hot'] else ""
-                msg += f"{i}. {item['title']}{hot_str}\n"
-            msg += "\n"
-        
-        if news.get('baidu'):
-            msg += "**🔍 百度热搜**\n"
-            for i, item in enumerate(news['baidu'][:NEWS_COUNT], 1):
-                hot_str = f" ({item['hot']})" if item['hot'] else ""
-                msg += f"{i}. {item['title']}{hot_str}\n"
-            msg += "\n"
+        # 新闻热搜（按平台分开显示，支持可点击链接）
+        if news:
+            msg += "#### 📰 新闻热搜\n\n"
+            
+            # 按平台顺序显示：微博、知乎、百度
+            platform_order = ['weibo', 'zhihu', 'baidu']
+            for platform_key in platform_order:
+                platform = news.get(platform_key)
+                if not platform:
+                    continue
+                
+                name = platform.get('name', platform_key)
+                icon = platform.get('icon', '📌')
+                items = platform.get('items', [])
+                
+                msg += f"**{icon} {name}热搜**\n"
+                for i, item in enumerate(items[:NEWS_COUNT], 1):
+                    title = item.get('title', '')
+                    url = item.get('url', '')
+                    hot = item.get('hot', '')
+                    
+                    # 如果有URL，添加可点击链接
+                    if url:
+                        title_display = f"[{title}]({url})"
+                    else:
+                        title_display = title
+                    
+                    hot_str = f" <font color=\"comment\">({hot})</font>" if hot else ""
+                    msg += f"{i}. {title_display}{hot_str}\n"
+                msg += "\n"
     
     # 结尾
     msg += "---\n"
