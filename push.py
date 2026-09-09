@@ -73,9 +73,23 @@ def get_weather_code_desc(code):
     """获取天气代码的中文描述"""
     return WEATHER_CODE_MAP.get(code, f'未知({code})')
 
-def get_wind_dir_desc(short):
-    """获取风向的中文描述"""
-    return WIND_DIR_MAP.get(short, short + '风')
+def get_wind_dir_desc(degrees):
+    """获取风向的中文描述（输入为角度）"""
+    # 将角度转换为16个方向的缩写
+    directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+    
+    # 如果输入已经是字符串，直接使用
+    if isinstance(degrees, str):
+        return WIND_DIR_MAP.get(degrees, degrees + '风')
+    
+    # 将角度转换为方向索引
+    try:
+        idx = int((degrees + 11.25) / 22.5) % 16
+        short = directions[idx]
+        return WIND_DIR_MAP.get(short, short + '风')
+    except Exception:
+        return f"{degrees}°"
 
 # ========== 1. 获取天气（使用 Open-Meteo，免费、无需Key、支持7天预报） ==========
 def get_weather():
