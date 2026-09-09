@@ -338,9 +338,9 @@ def get_daily_quote():
     print("  ❌ 每日一句获取失败")
     return None
 
-# ========== 4. 生成 Markdown 消息 ==========
-def generate_message(weather, news, quote):
-    """生成企业微信 Markdown 格式的消息"""
+# ========== 4. 生成 Markdown 消息（分多段，避免超过4096字符限制） ==========
+def generate_messages(weather, news, quote):
+    """生成企业微信 Markdown 格式的消息列表，分多段发送"""
     print("✍️ 正在生成消息...")
     
     now = datetime.now()
@@ -348,103 +348,123 @@ def generate_message(weather, news, quote):
     week_list = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
     week_str = week_list[now.weekday()]
     
-    msg = f"### 🌅 每日早报 | {date_str} {week_str}\n\n"
+    messages = []
     
-    # ---- 天气部分 ----
+    # ---- 第一段：天气 + 每日一句 ----
+    msg1 = f"### 🌅 每日早报 | {date_str} {week_str}\n\n"
+    
     if weather:
-        msg += "#### 🌤️ 今日天气\n\n"
-        msg += f"**城市**：{weather['city']}\n"
-        msg += f"**天气**：{weather['type']} {weather['temp']}\n"
-        msg += f"**风力**：{weather['wind']} {weather['wind_speed']}\n"
-        msg += f"**湿度**：{weather['humidity']}\n"
+        msg1 += "#### 🌤️ 今日天气\n\n"
+        msg1 += f"**城市**：{weather['city']}\n"
+        msg1 += f"**天气**：{weather['type']} {weather['temp']}\n"
+        msg1 += f"**风力**：{weather['wind']} {weather['wind_speed']}\n"
+        msg1 += f"**湿度**：{weather['humidity']}\n"
         
         # 未来几天预报
         if weather.get('forecast') and len(weather['forecast']) > 0:
-            msg += f"\n**📅 未来{len(weather['forecast'])}天预报**\n\n"
+            msg1 += f"\n**📅 未来{len(weather['forecast'])}天预报**\n\n"
             for day in weather['forecast']:
-                msg += f"- **{day['weekday']}** ({day['date']}): {day['type']}，{day['min_temp']} ~ {day['max_temp']}，降水概率 {day['precip_prob']}\n"
+                msg1 += f"- **{day['weekday']}** ({day['date']}): {day['type']}，{day['min_temp']} ~ {day['max_temp']}，降水概率 {day['precip_prob']}\n"
         
-        msg += "\n"
+        msg1 += "\n"
     
-    # ---- 每日一句 ----
+    # 每日一句
     if quote:
-        msg += "#### 💡 每日一句\n\n"
-        msg += f"> {quote['text']}\n"
+        msg1 += "#### 💡 每日一句\n\n"
+        msg1 += f"> {quote['text']}\n"
         if quote['from'] or quote['from_who']:
             author = quote['from_who'] or quote['from']
-            msg += f"> —— {author}\n"
-        msg += "\n"
+            msg1 += f"> —— {author}\n"
+        msg1 += "\n"
     
-    # ---- 新闻热搜 ----
+    msg1 += "---\n"
+    msg1 += f"*推送时间：{now.strftime('%Y-%m-%d %H:%M:%S')}*\n"
+    msg1 += "*由 GitHub Actions 自动推送*"
+    
+    messages.append(msg1)
+    
+    # ---- 第二段及以后：每个平台的热搜单独成段 ----
     if news:
-        msg += "#### 📰 今日热搜\n\n"
-        
-        # 新闻热搜（按平台分开显示，支持可点击链接）
-        if news:
-            msg += "#### 📰 新闻热搜\n\n"
+        platform_order = ['weibo', 'zhihu', 'baidu']
+        for platform_key in platform_order:
+            platform = news.get(platform_key)
+            if not platform:
+                continue
             
-            # 按平台顺序显示：微博、知乎、百度
-            platform_order = ['weibo', 'zhihu', 'baidu']
-            for platform_key in platform_order:
-                platform = news.get(platform_key)
-                if not platform:
-                    continue
+            name = platform.get('name', platform_key)
+            icon = platform.get('icon', '📌')
+            items = platform.get('items', [])
+            
+            msg = f"### 📰 {icon} {name}热搜 | {date_str} {week_str}\n\n"
+            
+            for i, item in enumerate(items[:NEWS_COUNT], 1):
+                title = item.get('title', '')
+                url = item.get('url', '')
+                hot = item.get('hot', '')
                 
-                name = platform.get('name', platform_key)
-                icon = platform.get('icon', '📌')
-                items = platform.get('items', [])
+                # 如果有URL，添加可点击链接
+                if url:
+                    title_display = f"[{title}]({url})"
+                else:
+                    title_display = title
                 
-                msg += f"**{icon} {name}热搜**\n"
-                for i, item in enumerate(items[:NEWS_COUNT], 1):
-                    title = item.get('title', '')
-                    url = item.get('url', '')
-                    hot = item.get('hot', '')
-                    
-                    # 如果有URL，添加可点击链接
-                    if url:
-                        title_display = f"[{title}]({url})"
-                    else:
-                        title_display = title
-                    
-                    hot_str = f" <font color=\"comment\">({hot})</font>" if hot else ""
-                    msg += f"{i}. {title_display}{hot_str}\n"
-                msg += "\n"
+                hot_str = f" <font color=\"comment\">({hot})</font>" if hot else ""
+                msg += f"{i}. {title_display}{hot_str}\n"
+            
+            msg += "\n---\n"
+            msg += f"*推送时间：{now.strftime('%Y-%m-%d %H:%M:%S')}*\n"
+            msg += "*由 GitHub Actions 自动推送*"
+            
+            messages.append(msg)
     
-    # 结尾
-    msg += "---\n"
-    msg += f"*推送时间：{now.strftime('%Y-%m-%d %H:%M:%S')}*\n"
-    msg += "*由 GitHub Actions 自动推送*"
-    
-    return msg
+    print(f"  ✅ 生成了 {len(messages)} 段消息")
+    return messages
 
-# ========== 5. 推送到企业微信 ==========
-def push_to_wechat(message):
-    """推送到企业微信"""
+# ========== 5. 推送到企业微信（支持多条消息） ==========
+def push_to_wechat(messages):
+    """推送到企业微信，支持多条消息"""
     print("📤 正在推送到企业微信...")
     
     if not WECHAT_WEBHOOK:
         print("  ❌ 未配置 WECHAT_WEBHOOK 环境变量")
         return False
     
-    payload = {
-        'msgtype': 'markdown',
-        'markdown': {
-            'content': message
-        }
-    }
+    if isinstance(messages, str):
+        messages = [messages]
     
-    try:
-        resp = requests.post(WECHAT_WEBHOOK, json=payload, timeout=15)
-        result = resp.json()
-        if result.get('errcode') == 0:
-            print("  ✅ 推送成功！")
-            return True
-        else:
-            print(f"  ❌ 推送失败: {result}")
-            return False
-    except Exception as e:
-        print(f"  ❌ 推送异常: {e}")
-        return False
+    success_count = 0
+    for i, message in enumerate(messages, 1):
+        print(f"  正在发送第 {i}/{len(messages)} 条消息...")
+        
+        payload = {
+            'msgtype': 'markdown',
+            'markdown': {
+                'content': message
+            }
+        }
+        
+        try:
+            resp = requests.post(WECHAT_WEBHOOK, json=payload, timeout=15)
+            result = resp.json()
+            if result.get('errcode') == 0:
+                print(f"  ✅ 第 {i} 条消息推送成功！")
+                success_count += 1
+            else:
+                print(f"  ❌ 第 {i} 条消息推送失败: {result}")
+        except Exception as e:
+            print(f"  ❌ 第 {i} 条消息推送异常: {e}")
+        
+        # 多条消息之间间隔1秒，避免频率限制
+        if i < len(messages):
+            import time
+            time.sleep(1)
+    
+    if success_count == len(messages):
+        print(f"  ✅ 全部 {len(messages)} 条消息推送成功！")
+        return True
+    else:
+        print(f"  ⚠️ 部分消息推送失败: {success_count}/{len(messages)}")
+        return success_count > 0
 
 # ========== 主函数 ==========
 def main():
@@ -453,6 +473,7 @@ def main():
     print(f"📅 时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"📍 城市：{CITY}")
     print(f"📊 预报天数：{FORECAST_DAYS}天")
+    print(f"📰 每条热搜数量：{NEWS_COUNT}条")
     print("=" * 50)
     
     # 1. 获取天气
@@ -464,18 +485,20 @@ def main():
     # 3. 获取每日一句
     quote = get_daily_quote()
     
-    # 4. 生成消息
-    message = generate_message(weather, news, quote)
+    # 4. 生成消息（分多段）
+    messages = generate_messages(weather, news, quote)
     
     # 打印消息预览
     print("\n" + "=" * 50)
     print("📄 消息预览：")
     print("=" * 50)
-    print(message[:800] + "..." if len(message) > 800 else message)
+    for i, msg in enumerate(messages, 1):
+        print(f"\n--- 第 {i}/{len(messages)} 条消息 (长度: {len(msg)}字符) ---")
+        print(msg[:500] + "..." if len(msg) > 500 else msg)
     print("=" * 50)
     
     # 5. 推送到企业微信
-    success = push_to_wechat(message)
+    success = push_to_wechat(messages)
     
     if success:
         print("\n🎉 全部完成！")
