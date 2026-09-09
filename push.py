@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 # ========== 配置（从环境变量读取，在 GitHub Secrets 中配置） ==========
 WECHAT_WEBHOOK = os.environ.get('WECHAT_WEBHOOK', '')  # 企业微信Webhook地址
 CITY = os.environ.get('CITY', '北京')  # 城市名称
-NEWS_COUNT = int(os.environ.get('NEWS_COUNT', '3'))  # 每条热搜显示数量（企业微信限制4096字符，建议3-5条）
-FORECAST_DAYS = int(os.environ.get('FORECAST_DAYS', '3'))  # 天气预报天数
+NEWS_COUNT = int(os.environ.get('NEWS_COUNT', '2'))  # 每条热搜显示数量（企业微信限制4096字符，建议2-3条）
+FORECAST_DAYS = int(os.environ.get('FORECAST_DAYS', '2'))  # 天气预报天数（企业微信限制4096字符，建议2-3天）
 
 # ========== 天气描述中英文映射 ==========
 WEATHER_CODE_MAP = {
