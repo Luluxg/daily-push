@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 每日推送脚本 - 推送到企业微信
-功能：天气、新闻热搜、每日一句、黄历
+功能：天气（含未来几天预报）、新闻热搜、每日一句
 使用 GitHub Actions 定时运行
 """
 
@@ -10,12 +10,53 @@ import requests
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ========== 配置（从环境变量读取，在 GitHub Secrets 中配置） ==========
 WECHAT_WEBHOOK = os.environ.get('WECHAT_WEBHOOK', '')  # 企业微信Webhook地址
 CITY = os.environ.get('CITY', '北京')  # 城市名称
-NEWS_COUNT = int(os.environ.get('NEWS_COUNT', '10'))  # 每条热搜显示数量
+NEWS_COUNT = int(os.environ.get('NEWS_COUNT', '5'))  # 每条热搜显示数量
+FORECAST_DAYS = int(os.environ.get('FORECAST_DAYS', '3'))  # 天气预报天数
+
+# ========== 天气描述中英文映射 ==========
+WEATHER_CODE_MAP = {
+    0: '晴',
+    1: '大部晴朗',
+    2: '局部多云',
+    3: '阴',
+    45: '雾',
+    48: '雾凇',
+    51: '小毛毛雨',
+    53: '毛毛雨',
+    55: '大毛毛雨',
+    56: '冻毛毛雨',
+    57: '大冻毛毛雨',
+    61: '小雨',
+    63: '中雨',
+    65: '大雨',
+    66: '冻雨',
+    67: '大冻雨',
+    71: '小雪',
+    73: '中雪',
+    75: '大雪',
+    77: '雪粒',
+    80: '小阵雨',
+    81: '阵雨',
+    82: '强阵雨',
+    85: '小阵雪',
+    86: '强阵雪',
+    95: '雷暴',
+    96: '雷暴伴小冰雹',
+    99: '雷暴伴大冰雹',
+}
+
+# 风向中英文映射
+WIND_DIR_MAP = {
+    'N': '北风', 'NNE': '东北偏北风', 'NE': '东北风', 'ENE': '东北偏东风',
+    'E': '东风', 'ESE': '东南偏东风', 'SE': '东南风', 'SSE': '东南偏南风',
+    'S': '南风', 'SSW': '西南偏南风', 'SW': '西南风', 'WSW': '西南偏西风',
+    'W': '西风', 'WNW': '西北偏西风', 'NW': '西北风', 'NNW': '西北偏北风',
+}
 
 # ========== 工具函数 ==========
 def safe_get(url, params=None, headers=None, timeout=15):
@@ -28,59 +69,96 @@ def safe_get(url, params=None, headers=None, timeout=15):
         print(f"  ⚠️ 请求失败: {url} - {e}")
         return None
 
-# ========== 1. 获取天气 ==========
+def get_weather_code_desc(code):
+    """获取天气代码的中文描述"""
+    return WEATHER_CODE_MAP.get(code, f'未知({code})')
+
+def get_wind_dir_desc(short):
+    """获取风向的中文描述"""
+    return WIND_DIR_MAP.get(short, short + '风')
+
+# ========== 1. 获取天气（使用 Open-Meteo，免费、无需Key、支持7天预报） ==========
 def get_weather():
-    """获取天气信息，使用多个备用API"""
+    """获取天气信息，包括当前天气和未来几天预报"""
     print("🌤️ 正在获取天气...")
     
-    # API1: VVhan 天气API（免费，不需要Key）
-    try:
-        data = safe_get(f'https://api.vvhan.com/api/weather', params={'city': CITY})
-        if data and data.get('success'):
-            info = data.get('data', {})
-            weather = {
-                'city': info.get('city', CITY),
-                'date': info.get('date', ''),
-                'week': info.get('week', ''),
-                'type': info.get('type', ''),
-                'temp': info.get('temp', ''),
-                'temp_range': info.get('low', '') + ' ~ ' + info.get('high', ''),
-                'wind': info.get('wind', ''),
-                'wind_speed': info.get('windSpeed', ''),
-                'humidity': info.get('humidity', ''),
-                'air': info.get('air', {}).get('level', '') if isinstance(info.get('air'), dict) else info.get('air', ''),
-                'tips': info.get('tips', ''),
-            }
-            print(f"  ✅ 天气获取成功: {weather['city']} {weather['type']} {weather['temp']}")
-            return weather
-    except Exception as e:
-        print(f"  ⚠️ VVhan天气API失败: {e}")
+    # 步骤1: 将城市名转换为经纬度（使用 Nominatim API）
+    print("  📍 正在获取城市坐标...")
+    geo_data = safe_get(
+        'https://nominatim.openstreetmap.org/search',
+        params={'q': CITY, 'format': 'json', 'limit': 1},
+        headers={'User-Agent': 'DailyPushBot/1.0'}
+    )
     
-    # API2: 备用天气API
-    try:
-        data = safe_get(f'https://wttr.in/{CITY}', params={'format': 'j1', 'lang': 'zh'})
-        if data:
-            current = data.get('current_condition', [{}])[0]
-            weather = {
-                'city': CITY,
-                'date': datetime.now().strftime('%Y-%m-%d'),
-                'week': '',
-                'type': current.get('lang_zh', [{}])[0].get('value', current.get('weatherDesc', [{}])[0].get('value', '')),
-                'temp': current.get('temp_C', '') + '°C',
-                'temp_range': '',
-                'wind': current.get('winddir16Point', '') + '风',
-                'wind_speed': current.get('windspeedKmph', '') + 'km/h',
-                'humidity': current.get('humidity', '') + '%',
-                'air': '',
-                'tips': '',
-            }
-            print(f"  ✅ 备用天气获取成功: {weather['type']} {weather['temp']}")
-            return weather
-    except Exception as e:
-        print(f"  ⚠️ 备用天气API失败: {e}")
+    if not geo_data or len(geo_data) == 0:
+        print("  ⚠️ 无法获取城市坐标，使用默认坐标（北京）")
+        lat, lon = 39.9042, 116.4074
+        city_name = CITY
+    else:
+        lat = float(geo_data[0]['lat'])
+        lon = float(geo_data[0]['lon'])
+        city_name = geo_data[0].get('name', CITY)
+        print(f"  ✅ 城市坐标获取成功: {city_name} ({lat}, {lon})")
     
-    print("  ❌ 所有天气API均失败")
-    return None
+    # 步骤2: 使用 Open-Meteo 获取天气
+    print("  🌡️ 正在获取天气数据...")
+    weather_data = safe_get(
+        'https://api.open-meteo.com/v1/forecast',
+        params={
+            'latitude': lat,
+            'longitude': lon,
+            'current': 'temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m',
+            'daily': 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+            'timezone': 'auto',
+            'forecast_days': FORECAST_DAYS + 1  # +1 因为包含今天
+        }
+    )
+    
+    if not weather_data:
+        print("  ❌ 天气数据获取失败")
+        return None
+    
+    # 解析当前天气
+    current = weather_data.get('current', {})
+    current_weather = {
+        'city': city_name,
+        'date': datetime.now().strftime('%Y-%m-%d'),
+        'type': get_weather_code_desc(current.get('weather_code', 0)),
+        'temp': f"{current.get('temperature_2m', 'N/A')}°C",
+        'wind': get_wind_dir_desc(current.get('wind_direction_10m', 'N')),
+        'wind_speed': f"{current.get('wind_speed_10m', 'N/A')}km/h",
+        'humidity': f"{current.get('relative_humidity_2m', 'N/A')}%",
+    }
+    
+    # 解析未来几天预报
+    daily = weather_data.get('daily', {})
+    forecast = []
+    dates = daily.get('time', [])
+    codes = daily.get('weather_code', [])
+    max_temps = daily.get('temperature_2m_max', [])
+    min_temps = daily.get('temperature_2m_min', [])
+    precip_probs = daily.get('precipitation_probability_max', [])
+    
+    for i in range(1, min(FORECAST_DAYS + 1, len(dates))):  # 从第2天开始（跳过今天）
+        try:
+            date_obj = datetime.strptime(dates[i], '%Y-%m-%d')
+            weekday = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][date_obj.weekday()]
+            forecast.append({
+                'date': dates[i],
+                'weekday': weekday,
+                'type': get_weather_code_desc(codes[i]),
+                'max_temp': f"{max_temps[i]}°C",
+                'min_temp': f"{min_temps[i]}°C",
+                'precip_prob': f"{precip_probs[i]}%" if precip_probs[i] is not None else 'N/A',
+            })
+        except Exception as e:
+            print(f"  ⚠️ 解析第{i}天预报失败: {e}")
+    
+    current_weather['forecast'] = forecast
+    print(f"  ✅ 天气获取成功: {current_weather['city']} {current_weather['type']} {current_weather['temp']}")
+    print(f"  📅 未来{len(forecast)}天预报已获取")
+    
+    return current_weather
 
 # ========== 2. 获取新闻热搜 ==========
 def get_hot_news():
@@ -89,35 +167,81 @@ def get_hot_news():
     
     all_news = {}
     
-    # 微博热搜
-    print("  🔍 获取微博热搜...")
-    data = safe_get('https://api.vvhan.com/api/hotlist/wbHot')
-    if data and data.get('success'):
-        items = data.get('data', [])[:NEWS_COUNT]
-        all_news['weibo'] = [{'title': item.get('title', ''), 'hot': item.get('hot', '')} for item in items]
-        print(f"    ✅ 微博热搜: {len(all_news['weibo'])}条")
-    else:
-        print("    ⚠️ 微博热搜获取失败")
+    # API列表（按优先级排序）
+    api_list = [
+        {
+            'name': '微博',
+            'key': 'weibo',
+            'urls': [
+                'https://api.oioweb.cn/api/common/HotList',
+                'https://api.vvhan.com/api/hotlist/wbHot',
+            ]
+        },
+        {
+            'name': '知乎',
+            'key': 'zhihu',
+            'urls': [
+                'https://api.oioweb.cn/api/common/HotList',
+                'https://api.vvhan.com/api/hotlist/zhihuHot',
+            ]
+        },
+        {
+            'name': '百度',
+            'key': 'baidu',
+            'urls': [
+                'https://api.oioweb.cn/api/common/HotList',
+                'https://api.vvhan.com/api/hotlist/baiduRD',
+            ]
+        },
+    ]
     
-    # 知乎热榜
-    print("  🔍 获取知乎热榜...")
-    data = safe_get('https://api.vvhan.com/api/hotlist/zhihuHot')
-    if data and data.get('success'):
-        items = data.get('data', [])[:NEWS_COUNT]
-        all_news['zhihu'] = [{'title': item.get('title', ''), 'hot': item.get('hot', '')} for item in items]
-        print(f"    ✅ 知乎热榜: {len(all_news['zhihu'])}条")
-    else:
-        print("    ⚠️ 知乎热榜获取失败")
-    
-    # 百度热搜
-    print("  🔍 获取百度热搜...")
-    data = safe_get('https://api.vvhan.com/api/hotlist/baiduRD')
-    if data and data.get('success'):
-        items = data.get('data', [])[:NEWS_COUNT]
-        all_news['baidu'] = [{'title': item.get('title', ''), 'hot': item.get('hot', '')} for item in items]
-        print(f"    ✅ 百度热搜: {len(all_news['baidu'])}条")
-    else:
-        print("    ⚠️ 百度热搜获取失败")
+    for api_info in api_list:
+        name = api_info['name']
+        key = api_info['key']
+        print(f"  🔍 获取{name}热搜...")
+        
+        for url in api_info['urls']:
+            try:
+                # 对于 oioweb API，需要指定 type 参数
+                if 'oioweb' in url:
+                    type_map = {'weibo': 'weibo', 'zhihu': 'zhihu', 'baidu': 'baidu'}
+                    data = safe_get(url, params={'type': type_map.get(key, key)})
+                else:
+                    data = safe_get(url)
+                
+                if not data:
+                    continue
+                
+                # 解析不同格式的返回
+                items = []
+                
+                # 格式1: oioweb API
+                if 'data' in data and isinstance(data['data'], list):
+                    for item in data['data'][:NEWS_COUNT]:
+                        title = item.get('title', '') or item.get('word', '') or item.get('name', '')
+                        hot = item.get('hot', '') or item.get('hot_value', '') or item.get('score', '')
+                        if title:
+                            items.append({'title': title, 'hot': str(hot) if hot else ''})
+                
+                # 格式2: vvhan API
+                elif data.get('success') and 'data' in data:
+                    for item in data['data'][:NEWS_COUNT]:
+                        title = item.get('title', '')
+                        hot = item.get('hot', '')
+                        if title:
+                            items.append({'title': title, 'hot': str(hot) if hot else ''})
+                
+                if items:
+                    all_news[key] = items
+                    print(f"    ✅ {name}热搜获取成功: {len(items)}条")
+                    break
+                    
+            except Exception as e:
+                print(f"    ⚠️ {name}热搜获取失败: {e}")
+                continue
+        
+        if key not in all_news:
+            print(f"    ⚠️ {name}热搜获取失败")
     
     return all_news
 
@@ -137,48 +261,11 @@ def get_daily_quote():
         print(f"  ✅ 每日一句获取成功: {quote['text'][:20]}...")
         return quote
     
-    # API2: 备用
-    data = safe_get('https://api.vvhan.com/api/ian/rand')
-    if data and data.get('success'):
-        quote = {
-            'text': data.get('data', {}).get('title', ''),
-            'from': '',
-            'from_who': '',
-        }
-        print(f"  ✅ 备用每日一句获取成功")
-        return quote
-    
     print("  ❌ 每日一句获取失败")
     return None
 
-# ========== 4. 获取黄历 ==========
-def get_huangli():
-    """获取今日黄历"""
-    print("📅 正在获取黄历...")
-    
-    data = safe_get('https://api.vvhan.com/api/huangli')
-    if data and data.get('success'):
-        info = data.get('data', {})
-        huangli = {
-            'date': info.get('date', ''),
-            'lunar': info.get('lunar', ''),
-            'ganzhi': info.get('ganzhi', ''),
-            'zodiac': info.get('zodiac', ''),
-            'star': info.get('star', ''),
-            'yi': info.get('yi', []),  # 宜
-            'ji': info.get('ji', []),  # 忌
-            'taishen': info.get('taishen', ''),
-            'chongsha': info.get('chongsha', ''),
-            'wuxing': info.get('wuxing', ''),
-        }
-        print(f"  ✅ 黄历获取成功: {huangli['lunar']}")
-        return huangli
-    
-    print("  ⚠️ 黄历获取失败")
-    return None
-
-# ========== 5. 生成 Markdown 消息 ==========
-def generate_message(weather, news, quote, huangli):
+# ========== 4. 生成 Markdown 消息 ==========
+def generate_message(weather, news, quote):
     """生成企业微信 Markdown 格式的消息"""
     print("✍️ 正在生成消息...")
     
@@ -194,33 +281,15 @@ def generate_message(weather, news, quote, huangli):
         msg += "#### 🌤️ 今日天气\n\n"
         msg += f"**城市**：{weather['city']}\n"
         msg += f"**天气**：{weather['type']} {weather['temp']}\n"
-        if weather['temp_range']:
-            msg += f"**温度**：{weather['temp_range']}\n"
-        if weather['wind']:
-            msg += f"**风力**：{weather['wind']} {weather['wind_speed']}\n"
-        if weather['humidity']:
-            msg += f"**湿度**：{weather['humidity']}\n"
-        if weather['air']:
-            msg += f"**空气质量**：{weather['air']}\n"
-        if weather['tips']:
-            msg += f"**温馨提示**：{weather['tips']}\n"
-        msg += "\n"
-    
-    # ---- 黄历部分 ----
-    if huangli:
-        msg += "#### 📅 今日黄历\n\n"
-        msg += f"**农历**：{huangli['lunar']}\n"
-        msg += f"**干支**：{huangli['ganzhi']} 【{huangli['zodiac']}】\n"
-        if huangli['star']:
-            msg += f"**星座**：{huangli['star']}\n"
-        if huangli['chongsha']:
-            msg += f"**冲煞**：{huangli['chongsha']}\n"
-        if huangli['yi']:
-            yi_str = '、'.join(huangli['yi'][:8]) if isinstance(huangli['yi'], list) else huangli['yi']
-            msg += f"**宜**：{yi_str}\n"
-        if huangli['ji']:
-            ji_str = '、'.join(huangli['ji'][:8]) if isinstance(huangli['ji'], list) else huangli['ji']
-            msg += f"**忌**：{ji_str}\n"
+        msg += f"**风力**：{weather['wind']} {weather['wind_speed']}\n"
+        msg += f"**湿度**：{weather['humidity']}\n"
+        
+        # 未来几天预报
+        if weather.get('forecast') and len(weather['forecast']) > 0:
+            msg += f"\n**📅 未来{len(weather['forecast'])}天预报**\n\n"
+            for day in weather['forecast']:
+                msg += f"- **{day['weekday']}** ({day['date']}): {day['type']}，{day['min_temp']} ~ {day['max_temp']}，降水概率 {day['precip_prob']}\n"
+        
         msg += "\n"
     
     # ---- 每日一句 ----
@@ -238,21 +307,21 @@ def generate_message(weather, news, quote, huangli):
         
         if news.get('weibo'):
             msg += "**🔥 微博热搜**\n"
-            for i, item in enumerate(news['weibo'][:5], 1):
+            for i, item in enumerate(news['weibo'][:NEWS_COUNT], 1):
                 hot_str = f" ({item['hot']})" if item['hot'] else ""
                 msg += f"{i}. {item['title']}{hot_str}\n"
             msg += "\n"
         
         if news.get('zhihu'):
             msg += "**💡 知乎热榜**\n"
-            for i, item in enumerate(news['zhihu'][:5], 1):
+            for i, item in enumerate(news['zhihu'][:NEWS_COUNT], 1):
                 hot_str = f" ({item['hot']})" if item['hot'] else ""
                 msg += f"{i}. {item['title']}{hot_str}\n"
             msg += "\n"
         
         if news.get('baidu'):
             msg += "**🔍 百度热搜**\n"
-            for i, item in enumerate(news['baidu'][:5], 1):
+            for i, item in enumerate(news['baidu'][:NEWS_COUNT], 1):
                 hot_str = f" ({item['hot']})" if item['hot'] else ""
                 msg += f"{i}. {item['title']}{hot_str}\n"
             msg += "\n"
@@ -264,7 +333,7 @@ def generate_message(weather, news, quote, huangli):
     
     return msg
 
-# ========== 6. 推送到企业微信 ==========
+# ========== 5. 推送到企业微信 ==========
 def push_to_wechat(message):
     """推送到企业微信"""
     print("📤 正在推送到企业微信...")
@@ -299,6 +368,7 @@ def main():
     print("🚀 每日推送脚本启动")
     print(f"📅 时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"📍 城市：{CITY}")
+    print(f"📊 预报天数：{FORECAST_DAYS}天")
     print("=" * 50)
     
     # 1. 获取天气
@@ -310,20 +380,17 @@ def main():
     # 3. 获取每日一句
     quote = get_daily_quote()
     
-    # 4. 获取黄历
-    huangli = get_huangli()
-    
-    # 5. 生成消息
-    message = generate_message(weather, news, quote, huangli)
+    # 4. 生成消息
+    message = generate_message(weather, news, quote)
     
     # 打印消息预览
     print("\n" + "=" * 50)
     print("📄 消息预览：")
     print("=" * 50)
-    print(message[:500] + "..." if len(message) > 500 else message)
+    print(message[:800] + "..." if len(message) > 800 else message)
     print("=" * 50)
     
-    # 6. 推送到企业微信
+    # 5. 推送到企业微信
     success = push_to_wechat(message)
     
     if success:
