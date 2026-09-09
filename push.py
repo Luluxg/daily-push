@@ -174,52 +174,106 @@ def get_weather():
     
     return current_weather
 
-# ========== 2. 获取新闻热搜（使用 NewsNow API，分开推送） ==========
+# ========== 2. 获取新闻热搜（多数据源，分开推送） ==========
+def get_html(url, headers=None, timeout=15):
+    """获取网页HTML内容"""
+    try:
+        if headers is None:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        resp = requests.get(url, headers=headers, timeout=timeout)
+        resp.raise_for_status()
+        return resp.text
+    except Exception as e:
+        print(f"  ⚠️ 获取网页失败: {url} - {e}")
+        return None
+
+def get_baidu_hot():
+    """直接爬取百度热搜页面"""
+    print("  🔍 尝试直接爬取百度热搜页面...")
+    try:
+        html = get_html('https://top.baidu.com/board?tab=realtime')
+        if not html:
+            return []
+        
+        # 从 HTML 中提取 JSON 数据
+        import re
+        match = re.search(r'<!--s-data:(.*?)-->', html, re.DOTALL)
+        if not match:
+            print("    ⚠️ 未找到百度热搜数据")
+            return []
+        
+        import json
+        data = json.loads(match.group(1))
+        cards = data.get('data', {}).get('cards', [])
+        if not cards:
+            print("    ⚠️ 百度热搜数据为空")
+            return []
+        
+        items = []
+        content = cards[0].get('content', [])
+        for item in content[:NEWS_COUNT]:
+            title = item.get('word', '') or item.get('query', '')
+            link = item.get('url', '') or item.get('rawUrl', '')
+            hot = item.get('hotScore', '') or item.get('heatScore', '')
+            if title:
+                # 如果没有链接，构造百度搜索链接
+                if not link:
+                    link = f'https://www.baidu.com/s?wd={requests.utils.quote(title)}'
+                items.append({
+                    'title': title,
+                    'url': link,
+                    'hot': str(hot) if hot else ''
+                })
+        
+        print(f"    ✅ 百度热搜爬取成功: {len(items)}条")
+        return items
+    except Exception as e:
+        print(f"    ⚠️ 百度热搜爬取失败: {e}")
+        return []
+
 def get_hot_news():
-    """获取多个平台的热搜榜，使用 NewsNow API，支持可点击链接"""
+    """获取多个平台的热搜榜，多数据源，支持可点击链接"""
     print("📰 正在获取新闻热搜...")
     
     all_news = {}
     
-    # NewsNow API 配置（按平台分开）
-    api_list = [
+    # 平台配置（按平台分开）
+    platforms = [
         {
             'name': '微博',
             'key': 'weibo',
-            'url': 'https://newsnow.busiyi.world/api/s?id=weibo&latest=true',
-            'icon': '🔥'
+            'icon': '🔥',
+            'newsnow_url': 'https://newsnow.busiyi.world/api/s?id=weibo&latest=true',
         },
         {
             'name': '知乎',
             'key': 'zhihu',
-            'url': 'https://newsnow.busiyi.world/api/s?id=zhihu&latest=true',
-            'icon': '💡'
+            'icon': '💡',
+            'newsnow_url': 'https://newsnow.busiyi.world/api/s?id=zhihu&latest=true',
         },
         {
             'name': '百度',
             'key': 'baidu',
-            'url': 'https://newsnow.busiyi.world/api/s?id=baidu&latest=true',
-            'icon': '🔍'
+            'icon': '🔍',
+            'newsnow_url': 'https://newsnow.busiyi.world/api/s?id=baidu&latest=true',
+            'scraper': get_baidu_hot,  # 直接爬取作为备用
         },
     ]
     
-    for api_info in api_list:
-        name = api_info['name']
-        key = api_info['key']
-        url = api_info['url']
-        icon = api_info['icon']
+    for platform in platforms:
+        name = platform['name']
+        key = platform['key']
+        icon = platform['icon']
         print(f"  {icon} 获取{name}热搜...")
         
+        items = []
+        
+        # 方法1: 尝试 NewsNow API
         try:
-            data = safe_get(url, timeout=15)
-            
-            if not data:
-                print(f"    ⚠️ {name}热搜获取失败（无数据）")
-                continue
-            
-            # 解析 NewsNow API 返回格式
-            items = []
-            if data.get('status') in ['success', 'cache'] and 'items' in data:
+            data = safe_get(platform['newsnow_url'], timeout=15)
+            if data and data.get('status') in ['success', 'cache'] and 'items' in data:
                 for item in data['items'][:NEWS_COUNT]:
                     title = item.get('title', '') or item.get('word', '') or item.get('name', '')
                     link = item.get('url', '') or item.get('link', '')
@@ -230,20 +284,26 @@ def get_hot_news():
                             'url': link,
                             'hot': str(hot) if hot else ''
                         })
-            
-            if items:
-                all_news[key] = {
-                    'name': name,
-                    'icon': icon,
-                    'items': items
-                }
-                print(f"    ✅ {name}热搜获取成功: {len(items)}条")
-            else:
-                print(f"    ⚠️ {name}热搜获取失败（解析为空）")
-                
+                if items:
+                    print(f"    ✅ {name}热搜获取成功(NewsNow): {len(items)}条")
         except Exception as e:
-            print(f"    ⚠️ {name}热搜获取失败: {e}")
-            continue
+            print(f"    ⚠️ NewsNow API失败: {e}")
+        
+        # 方法2: 如果 NewsNow API 失败，尝试直接爬取（仅百度）
+        if not items and platform.get('scraper'):
+            try:
+                items = platform['scraper']()
+            except Exception as e:
+                print(f"    ⚠️ 直接爬取失败: {e}")
+        
+        if items:
+            all_news[key] = {
+                'name': name,
+                'icon': icon,
+                'items': items
+            }
+        else:
+            print(f"    ⚠️ {name}热搜获取失败（所有方法均失败）")
     
     return all_news
 
