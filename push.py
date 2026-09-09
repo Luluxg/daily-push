@@ -59,10 +59,10 @@ WIND_DIR_MAP = {
 }
 
 # ========== 工具函数 ==========
-def safe_get(url, params=None, headers=None, timeout=15):
+def safe_get(url, params=None, headers=None, timeout=15, verify=True):
     """安全的HTTP GET请求，失败返回None"""
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+        resp = requests.get(url, params=params, headers=headers, timeout=timeout, verify=verify)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -216,10 +216,10 @@ def get_hot_news():
         
         for url in api_info['urls']:
             try:
-                # 对于 oioweb API，需要指定 type 参数
+                # 对于 oioweb API，需要指定 type 参数，并禁用 SSL 验证（自签名证书）
                 if 'oioweb' in url:
                     type_map = {'weibo': 'weibo', 'zhihu': 'zhihu', 'baidu': 'baidu'}
-                    data = safe_get(url, params={'type': type_map.get(key, key)})
+                    data = safe_get(url, params={'type': type_map.get(key, key)}, verify=False)
                 else:
                     data = safe_get(url)
                 
