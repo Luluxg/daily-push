@@ -62,7 +62,17 @@ WIND_DIR_MAP = {
 def safe_get(url, params=None, headers=None, timeout=15, verify=True):
     """安全的HTTP GET请求，失败返回None"""
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=timeout, verify=verify)
+        # 默认请求头，模拟浏览器访问
+        default_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        }
+        # 合并自定义请求头
+        if headers:
+            default_headers.update(headers)
+        
+        resp = requests.get(url, params=params, headers=default_headers, timeout=timeout, verify=verify)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -180,7 +190,9 @@ def get_html(url, headers=None, timeout=15):
     try:
         if headers is None:
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
             }
         resp = requests.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
