@@ -1,0 +1,64 @@
+name: 每日早报推送
+
+# 触发条件
+on:
+  schedule:
+    # 每天 UTC 时间 0:00、1:00、2:00 执行 = 北京时间 8:00、9:00、10:00
+    # 多次运行确保至少有一次成功，脚本有状态检测，每天只会推送一次
+    - cron: '0 0,1,2 * * *'
+  
+  # 支持手动触发（在 Actions 页面点击 Run workflow）
+  workflow_dispatch:
+    inputs:
+      city:
+        description: '城市名称（可选，默认使用 Secrets 中配置的城市）'
+        required: false
+        default: ''
+
+# 任务
+jobs:
+  daily-push:
+    runs-on: ubuntu-latest
+    
+    # 允许写入仓库，用于提交状态文件
+    permissions:
+      contents: write
+    
+    steps:
+      # 1. 检出代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      # 2. 设置 Python 环境
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      # 3. 安装依赖
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+      
+      # 4. 运行推送脚本
+      - name: 运行每日推送
+        env:
+          # 从 GitHub Secrets 读取配置
+          WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
+          CITY: ${{ github.event.inputs.city || secrets.CITY || '北京' }}
+          NEWS_COUNT: ${{ secrets.NEWS_COUNT || '10' }}
+        run: python push.py
+      
+      # 5. 提交状态文件（记录今天已推送，避免多次推送）
+      - name: 提交状态文件
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add last_push_date.txt || true
+          git diff --staged --quiet || git commit -m "更新推送状态: $(date +%Y-%m-%d)"
+          git push || true
+      
+      # 6. 完成提示
+      - name: 完成
+        run: echo "✅ 每日推送任务完成！"
