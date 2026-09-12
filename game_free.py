@@ -146,81 +146,114 @@ def fetch_steam_deals():
     """从 Steam 获取打折游戏"""
     games = []
     
-    # 1. 用搜索 API 获取特惠游戏列表（按好评排序）
-    search_url = f"https://store.steampowered.com/search/results/?query&start=0&count=50&dynamic_data=&sort_by={STEAM_SORT_BY}&filter=globaltopsellers&infinite=1&l=schinese&cc=cn&specials=1"
-    
+    # 使用 Steam 官方特惠 API
+    # 方法1: 使用 featuredcategories 获取 top_sellers 中的特惠
     try:
-        response = requests.get(search_url, timeout=15)
+        print("  尝试 Steam featuredcategories API...")
+        featured_url = "https://store.steampowered.com/api/featuredcategories/?l=schinese&cc=cn"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
+        }
+        response = requests.get(featured_url, headers=headers, timeout=15)
+        print(f"  featuredcategories 状态码: {response.status_code}")
+        
         if response.status_code == 200:
             data = response.json()
-            html = data.get("results_html", "")
-            
-            # 从 HTML 中提取 appid
-            appids = re.findall(r'data-ds-appid="(\d+)"', html)
-            print(f"✅ Steam 搜索到 {len(appids)} 个特惠游戏")
-            
-            # 2. 用 appdetails API 获取每个游戏的详细信息（中文名称、价格）
-            # 分批获取，每批最多 10 个（避免速率限制）
-            batch_size = 10
-            for i in range(0, min(len(appids), 40), batch_size):
-                batch = appids[i:i+batch_size]
-                appids_str = ",".join(batch)
-                
-                details_url = f"https://store.steampowered.com/api/appdetails?appids={appids_str}&l=schinese&cc=cn&filters=price_overview,basic"
-                
-                try:
-                    details_response = requests.get(details_url, timeout=15)
-                    if details_response.status_code == 200:
-                        details_data = details_response.json()
-                        
-                        for appid in batch:
-                            app_data = details_data.get(appid, {})
-                            if not app_data.get("success"):
-                                continue
-                            
-                            game_info = app_data.get("data", {})
-                            name = game_info.get("name", "")
-                            price_overview = game_info.get("price_overview", {})
-                            is_free = game_info.get("is_free", False)
-                            
-                            if is_free:
-                                continue  # 跳过免费游戏（Steam 免费的单独处理）
-                            
-                            discount_percent = price_overview.get("discount_percent", 0)
-                            initial = price_overview.get("initial", 0)
-                            final = price_overview.get("final", 0)
-                            initial_formatted = price_overview.get("initial_formatted", "")
-                            final_formatted = price_overview.get("final_formatted", "")
-                            
-                            # 筛选折扣 >= 最低折扣
-                            if discount_percent >= STEAM_MIN_DISCOUNT and name:
-                                # 获取游戏封面图
-                                header_image = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{appid}/header.jpg"
-                                
+            # 查找 top_sellers 或 specials 分类
+            for cat_id, cat_data in data.items():
+                if isinstance(cat_data, dict) and "items" in cat_data:
+                    items = cat_data.get("items", [])
+                    for item in items:
+                        if item.get("discount_percent", 0) >= STEAM_MIN_DISCOUNT:
+                            appid = item.get("id")
+                            name = item.get("name", "")
+                            if appid and name:
                                 games.append({
                                     "id": f"steam_{appid}",
                                     "title": name,
-                                    "discount": discount_percent,
-                                    "initial_price": initial_formatted or f"¥ {initial/100:.2f}",
-                                    "final_price": final_formatted or f"¥ {final/100:.2f}",
+                                    "discount": item.get("discount_percent", 0),
+                                    "initial_price": item.get("original_price", ""),
+                                    "final_price": item.get("final_price", ""),
                                     "platforms": "Steam",
-                                    "image": header_image,
+                                    "image": item.get("header_image", item.get("large_capsule_image", "")),
                                     "url": f"https://store.steampowered.com/app/{appid}/",
                                     "type": "steam_deal"
                                 })
-                except Exception as e:
-                    print(f"❌ 获取游戏详情失败: {e}")
-                
-                time.sleep(1)  # 避免速率限制
-                
-                if len(games) >= STEAM_MAX_GAMES * 2:
-                    break  # 够了就停止
-            
-            print(f"✅ Steam 打折游戏（>={STEAM_MIN_DISCOUNT}%）: {len(games)} 个")
+            print(f"  featuredcategories 获取到 {len(games)} 个打折游戏")
     except Exception as e:
-        print(f"❌ Steam 搜索失败: {e}")
+        print(f"  featuredcategories 失败: {e}")
     
-    return games[:STEAM_MAX_GAMES]
+    # 方法2: 如果方法1获取的不够，用搜索 API
+    if len(games) < STEAM_MAX_GAMES:
+        try:
+            print("  尝试 Steam 搜索 API...")
+            search_url = f"https://store.steampowered.com/search/results/?query&start=0&count=30&dynamic_data=&sort_by={STEAM_SORT_BY}&filter=globaltopsellers&infinite=1&l=schinese&cc=cn&specials=1"
+            response = requests.get(search_url, headers=headers, timeout=15)
+            print(f"  搜索 API 状态码: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                html = data.get("results_html", "")
+                appids = re.findall(r'data-ds-appid="(\d+)"', html)
+                print(f"  搜索到 {len(appids)} 个特惠游戏 appid")
+                
+                # 批量获取详情
+                batch_size = 5
+                for i in range(0, min(len(appids), 20), batch_size):
+                    batch = appids[i:i+batch_size]
+                    appids_str = ",".join(batch)
+                    details_url = f"https://store.steampowered.com/api/appdetails?appids={appids_str}&l=schinese&cc=cn&filters=price_overview,basic"
+                    
+                    try:
+                        details_response = requests.get(details_url, headers=headers, timeout=15)
+                        if details_response.status_code == 200:
+                            details_data = details_response.json()
+                            for appid in batch:
+                                app_data = details_data.get(appid, {})
+                                if not app_data.get("success"):
+                                    continue
+                                game_info = app_data.get("data", {})
+                                name = game_info.get("name", "")
+                                price_overview = game_info.get("price_overview", {})
+                                is_free = game_info.get("is_free", False)
+                                
+                                if is_free or not name:
+                                    continue
+                                
+                                discount_percent = price_overview.get("discount_percent", 0)
+                                if discount_percent >= STEAM_MIN_DISCOUNT:
+                                    header_image = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{appid}/header.jpg"
+                                    games.append({
+                                        "id": f"steam_{appid}",
+                                        "title": name,
+                                        "discount": discount_percent,
+                                        "initial_price": price_overview.get("initial_formatted", f"¥{price_overview.get('initial',0)/100:.0f}"),
+                                        "final_price": price_overview.get("final_formatted", f"¥{price_overview.get('final',0)/100:.0f}"),
+                                        "platforms": "Steam",
+                                        "image": header_image,
+                                        "url": f"https://store.steampowered.com/app/{appid}/",
+                                        "type": "steam_deal"
+                                    })
+                    except Exception as e:
+                        print(f"  获取详情失败: {e}")
+                    time.sleep(1)
+                    
+                    if len(games) >= STEAM_MAX_GAMES * 2:
+                        break
+        except Exception as e:
+            print(f"  搜索 API 失败: {e}")
+    
+    # 去重
+    seen = set()
+    unique_games = []
+    for game in games:
+        if game["id"] not in seen:
+            seen.add(game["id"])
+            unique_games.append(game)
+    
+    print(f"✅ Steam 打折游戏（>={STEAM_MIN_DISCOUNT}%）: {len(unique_games)} 个")
+    return unique_games[:STEAM_MAX_GAMES]
 
 # =====================================================
 # 主逻辑
@@ -249,6 +282,9 @@ def main():
     
     if not new_epic and not new_steam:
         print("✅ 没有新的游戏优惠，跳过推送")
+        # 仍然保存状态文件
+        state["last_push"] = now_str
+        save_state(state)
         return
     
     now_str = get_beijing_time().strftime("%Y-%m-%d %H:%M")
