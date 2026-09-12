@@ -37,7 +37,7 @@ jobs:
       # 4. 运行游戏喜加一推送脚本
       - name: 运行推送脚本
         env:
-          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+          WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
         run: python game_free.py
       
       # 5. 提交状态文件（避免重复推送）
