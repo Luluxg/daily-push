@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 # 配置
 # =====================================================
 # 企业微信机器人 Webhook（从环境变量读取，也可以直接填写）
-WECOM_WEBHOOK = os.environ.get("WECOM_WEBHOOK", "")
+WECOM_WEBHOOK = os.environ.get("WECHAT_WEBHOOK", os.environ.get("WECOM_WEBHOOK", ""))
 
 # 状态文件路径（保存已推送的游戏 ID，避免重复推送）
 STATE_FILE = "game_free_state.json"
