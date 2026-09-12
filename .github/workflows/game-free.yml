@@ -1,0 +1,50 @@
+name: 游戏喜加一推送
+
+# 触发条件
+on:
+  schedule:
+    # 每天 UTC 时间 2:00、10:00 执行 = 北京时间 10:00、18:00
+    # 每天检测两次，确保不错过新的免费游戏
+    - cron: '0 2,10 * * *'
+  
+  # 支持手动触发
+  workflow_dispatch:
+
+# 任务
+jobs:
+  game-free:
+    runs-on: ubuntu-latest
+    
+    # 允许写入仓库，用于提交状态文件
+    permissions:
+      contents: write
+    
+    steps:
+      # 1. 检出代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+      
+      # 2. 设置 Python 环境
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      # 3. 安装依赖
+      - name: 安装依赖
+        run: pip install requests
+      
+      # 4. 运行游戏喜加一推送脚本
+      - name: 运行推送脚本
+        env:
+          WECOM_WEBHOOK: ${{ secrets.WECOM_WEBHOOK }}
+        run: python game_free.py
+      
+      # 5. 提交状态文件（避免重复推送）
+      - name: 提交状态文件
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add game_free_state.json
+          git commit -m "更新游戏喜加一状态文件" || echo "没有新的状态需要提交"
+          git push
