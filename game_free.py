@@ -101,8 +101,8 @@ def fetch_epic_free_games():
             elements = data.get("data", {}).get("Catalog", {}).get("searchStore", {}).get("elements", [])
             for item in elements:
                 title = item.get("title", "")
-                promotions = item.get("promotions", {})
-                promotional_offers = promotions.get("promotionalOffers", [])
+                promotions = item.get("promotions") or {}
+                promotional_offers = promotions.get("promotionalOffers", []) or []
                 
                 is_free = False
                 end_date = "未知"
