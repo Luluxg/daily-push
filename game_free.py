@@ -44,6 +44,7 @@ STATE_FILE = "game_deals_state.json"
 # Steam 打折配置
 STEAM_MIN_DISCOUNT = 50  # 最低折扣（50%）
 STEAM_MAX_GAMES = 12  # 每次最多推送多少个 Steam 打折游戏
+STEAM_MAX_PAGES = 3  # 最多翻几页（每页30个）
 STEAM_SORT_BY = "Reviews_DESC"  # 排序方式：Reviews_DESC（好评）、Released_DESC（最新）、Price_DESC（价格）
 
 # Epic 免费游戏配置
@@ -365,63 +366,82 @@ def fetch_steam_deals():
     except Exception as e:
         print(f"  featuredcategories 失败: {e}")
     
-    # 方法2: 如果方法1获取的不够，用搜索 API + appdetails
+    # 方法2: 如果方法1获取的不够，用搜索 API + appdetails（支持翻页）
     if len(games) < STEAM_MAX_GAMES:
         try:
-            print("  尝试 Steam 搜索 API...")
-            search_url = f"https://store.steampowered.com/search/results/?query&start=0&count=30&dynamic_data=&sort_by={STEAM_SORT_BY}&filter=globaltopsellers&infinite=1&l=schinese&cc=cn&specials=1"
-            response = request_with_retry(search_url, headers=headers)
-            print(f"  搜索 API 状态码: {response.status_code if response else 'None'}")
+            print(f"  尝试 Steam 搜索 API（最多翻 {STEAM_MAX_PAGES} 页）...")
+            all_appids = []
             
-            if response and response.status_code == 200:
-                data = response.json()
-                html = data.get("results_html", "")
-                appids = re.findall(r'data-ds-appid="(\d+)"', html)
-                print(f"  搜索到 {len(appids)} 个特惠游戏 appid")
+            # 翻页获取
+            for page in range(STEAM_MAX_PAGES):
+                start = page * 30
+                search_url = f"https://store.steampowered.com/search/results/?query&start={start}&count=30&dynamic_data=&sort_by={STEAM_SORT_BY}&filter=globaltopsellers&infinite=1&l=schinese&cc=cn&specials=1"
+                response = request_with_retry(search_url, headers=headers)
                 
-                # 批量获取详情（官方 appdetails API）
-                batch_size = 5
-                for i in range(0, min(len(appids), 20), batch_size):
-                    batch = appids[i:i+batch_size]
-                    appids_str = ",".join(batch)
-                    details_url = f"https://store.steampowered.com/api/appdetails?appids={appids_str}&l=schinese&cc=cn&filters=price_overview,basic"
+                if response and response.status_code == 200:
+                    data = response.json()
+                    html = data.get("results_html", "")
+                    page_appids = re.findall(r'data-ds-appid="(\d+)"', html)
+                    print(f"  第{page+1}页: 找到 {len(page_appids)} 个特惠游戏 appid")
+                    all_appids.extend(page_appids)
                     
-                    try:
-                        details_response = request_with_retry(details_url, headers=headers)
-                        if details_response and details_response.status_code == 200:
-                            details_data = details_response.json()
-                            for appid in batch:
-                                app_data = details_data.get(appid, {})
-                                if not app_data.get("success"):
-                                    continue
-                                game_info = app_data.get("data", {})
-                                name = game_info.get("name", "")
-                                price_overview = game_info.get("price_overview", {})
-                                is_free = game_info.get("is_free", False)
-                                
-                                if is_free or not name:
-                                    continue
-                                
-                                discount_percent = price_overview.get("discount_percent", 0)
-                                if discount_percent >= STEAM_MIN_DISCOUNT:
-                                    header_image = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{appid}/header.jpg"
-                                    games.append({
-                                        "id": f"steam_{appid}",
-                                        "title": name,
-                                        "discount": discount_percent,
-                                        "initial_price": price_overview.get("initial_formatted", f"¥{price_overview.get('initial',0)/100:.0f}"),
-                                        "final_price": price_overview.get("final_formatted", f"¥{price_overview.get('final',0)/100:.0f}"),
-                                        "platforms": "Steam",
-                                        "image": header_image,
-                                        "url": f"https://store.steampowered.com/app/{appid}/",
-                                        "type": "steam_deal"
-                                    })
-                    except Exception as e:
-                        print(f"  获取详情失败: {e}")
-                    time.sleep(1)
-                    
-                    if len(games) >= STEAM_MAX_GAMES * 2:
+                    # 如果这一页没有数据，停止翻页
+                    if len(page_appids) == 0:
                         break
+                else:
+                    print(f"  第{page+1}页获取失败，停止翻页")
+                    break
+                
+                time.sleep(1)  # 翻页间隔
+            
+            print(f"  总共找到 {len(all_appids)} 个特惠游戏 appid")
+            
+            # 去重
+            all_appids = list(dict.fromkeys(all_appids))
+            
+            # 批量获取详情（官方 appdetails API）
+            batch_size = 5
+            for i in range(0, min(len(all_appids), 50), batch_size):
+                batch = all_appids[i:i+batch_size]
+                appids_str = ",".join(batch)
+                details_url = f"https://store.steampowered.com/api/appdetails?appids={appids_str}&l=schinese&cc=cn&filters=price_overview,basic"
+                
+                try:
+                    details_response = request_with_retry(details_url, headers=headers)
+                    if details_response and details_response.status_code == 200:
+                        details_data = details_response.json()
+                        for appid in batch:
+                            app_data = details_data.get(appid, {})
+                            if not app_data.get("success"):
+                                continue
+                            game_info = app_data.get("data", {})
+                            name = game_info.get("name", "")
+                            price_overview = game_info.get("price_overview", {})
+                            is_free = game_info.get("is_free", False)
+                            
+                            if is_free or not name:
+                                continue
+                            
+                            discount_percent = price_overview.get("discount_percent", 0)
+                            if discount_percent >= STEAM_MIN_DISCOUNT:
+                                header_image = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{appid}/header.jpg"
+                                games.append({
+                                    "id": f"steam_{appid}",
+                                    "title": name,
+                                    "discount": discount_percent,
+                                    "initial_price": price_overview.get("initial_formatted", f"¥{price_overview.get('initial',0)/100:.0f}"),
+                                    "final_price": price_overview.get("final_formatted", f"¥{price_overview.get('final',0)/100:.0f}"),
+                                    "platforms": "Steam",
+                                    "image": header_image,
+                                    "url": f"https://store.steampowered.com/app/{appid}/",
+                                    "type": "steam_deal"
+                                })
+                except Exception as e:
+                    print(f"  获取详情失败: {e}")
+                time.sleep(1)
+                
+                if len(games) >= STEAM_MAX_GAMES * 2:
+                    break
         except Exception as e:
             print(f"  搜索 API 失败: {e}")
     
